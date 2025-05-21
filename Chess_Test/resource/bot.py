@@ -19,7 +19,7 @@ class ChessBot:
 
     def make_move(self, board, turn, castling_rights, last_move):
         start_time = time.time()
-        max_time = 2  # Maximum time for move calculation (seconds)
+        max_time = 5  # Increased time for move calculation (seconds)
         bot_color = 'b'  # Assuming bot plays black
 
         # 1. Try opening book first
@@ -31,7 +31,8 @@ class ChessBot:
         best_move = self.find_best_move_with_alphabeta(board, bot_color, start_time, max_time)
         
         if best_move:
-            print(f"[Bot] Best move found: {best_move}")
+            score = self.evaluator.evaluate(board, bot_color)
+            print(f"[Bot] Best move found: {best_move}, Evaluation score: {score}")
             self.execute_move(board, best_move[0], best_move[1])
             return True
         
@@ -46,7 +47,7 @@ class ChessBot:
                 turn=turn,
                 castling_rights=castling_rights,
                 last_move=last_move,
-                weight_pow=0.7
+                weight_pow=0.5  # Adjusted to prefer more common moves
             )
             if book_move:
                 print(f"[Bot] Using book move: {book_move}")
@@ -60,8 +61,8 @@ class ChessBot:
         best_move = None
         best_score = -math.inf
         
-        # Iterative deepening (start with depth 2, increase until time runs out)
-        for depth in range(2, 5):
+        # Iterative deepening (reduced max depth to 5 to avoid timeout)
+        for depth in range(2, 6):
             if time.time() - start_time > max_time:
                 break
                 
@@ -69,7 +70,7 @@ class ChessBot:
                 score, move = self.alphabeta_search(
                     board=board,
                     depth=depth,
-                    alpha=-math.inf,
+                    kappa=-math.inf,
                     beta=math.inf,
                     maximizing_player=True,
                     current_color=color,
@@ -87,7 +88,7 @@ class ChessBot:
 
         return best_move
 
-    def alphabeta_search(self, board, depth, alpha, beta, maximizing_player, current_color, start_time, max_time):
+    def alphabeta_search(self, board, depth, kappa, beta, maximizing_player, current_color, start_time, max_time):
         """Alpha-Beta search implementation"""
         if time.time() - start_time > max_time:
             raise TimeoutError()
@@ -108,7 +109,7 @@ class ChessBot:
             
             # Recursive Alpha-Beta search
             value, _ = self.alphabeta_search(
-                new_board, depth-1, alpha, beta,
+                new_board, depth-1, kappa, beta,
                 not maximizing_player,
                 'w' if current_color == 'b' else 'b',
                 start_time, max_time
@@ -119,7 +120,7 @@ class ChessBot:
                 if value > best_value:
                     best_value = value
                     best_move = move
-                    alpha = max(alpha, best_value)
+                    kappa = max(kappa, best_value)
             else:
                 if value < best_value:
                     best_value = value
@@ -127,7 +128,7 @@ class ChessBot:
                     beta = min(beta, best_value)
                     
             # Alpha-Beta pruning
-            if beta <= alpha:
+            if beta <= kappa:
                 self.store_killer_move(move, depth)
                 break
                 
@@ -153,9 +154,19 @@ class ChessBot:
             target = board[end[1]][end[0]]
             score = 0
             
+            # Check if move leaves king in check
+            temp_board = self.copy_board(board)
+            self.execute_move(temp_board, start, end)
+            if self.move_validator.is_king_in_check(temp_board, color):
+                score -= 1000  # Heavy penalty for moves leaving king in check
+                continue  # Skip invalid moves
+            
             # Capture heuristic
             if target:
-                score = 10 * PIECE_VALUES.get(target[1], 0) - PIECE_VALUES.get(piece[1], 0)
+                score += 10 * PIECE_VALUES.get(target[1], 0) - PIECE_VALUES.get(piece[1], 0)
+            
+            # Exchange heuristic
+            score += self.evaluator.exchange_score(board, color, start, end) * 5
             
             # Killer move heuristic
             if self.is_killer_move(move, depth):
@@ -168,6 +179,26 @@ class ChessBot:
             if piece[1] == 'P' and (end[1] == 0 or end[1] == 7):
                 score += 500
                 
+            # Castling heuristic
+            if piece[1] == 'K' and abs(end[0] - start[0]) == 2:
+                score += 200  # Prioritize castling
+                
+            # Penalty for moving to attacked square
+            if self.evaluator.is_piece_attacked(temp_board, end, color):
+                score -= PIECE_VALUES.get(piece[1], 0) // 2
+                
+            # Penalty for moving queen to attacked square
+            if piece[1] == 'Q':
+                if self.evaluator.is_piece_attacked(temp_board, end, color):
+                    score -= 300  # Heavy penalty for moving queen to danger
+                    
+            # Penalty for queen exchange
+            if target and target[1] == 'Q' and piece[1] == 'Q':
+                score -= 100
+                material_score = self.evaluator.material_score(board, color)
+                if material_score > 300:
+                    score += 50
+                    
             scored_moves.append((score, move))
         
         # Sort moves by score (highest first)
@@ -196,7 +227,11 @@ class ChessBot:
                 if piece and piece[0] == color:
                     valid_moves = self.move_validator.get_all_valid_moves((file, rank))
                     for move in valid_moves:
-                        moves.append(((file, rank), move))
+                        # Verify move doesn't leave king in check
+                        temp_board = self.copy_board(board)
+                        self.execute_move(temp_board, (file, rank), move)
+                        if not self.move_validator.is_king_in_check(temp_board, color):
+                            moves.append(((file, rank), move))
         return moves
 
     def execute_move(self, board, start_pos, end_pos):
@@ -209,6 +244,9 @@ class ChessBot:
         # Handle pawn promotion
         if piece and piece[1] == 'P' and (end_rank == 0 or end_rank == 7):
             board[end_rank][end_file] = piece[0] + 'Q'
+        # Check if king is in check (for debugging only)
+        if self.move_validator.is_king_in_check(board, piece[0]):
+            print(f"[Warning] Move {start_pos}->{end_pos} leaves king in check!")
 
     def fallback_to_random_move(self, board, color):
         """Fallback to random move if no better move found"""

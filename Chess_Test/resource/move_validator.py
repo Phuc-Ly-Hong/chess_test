@@ -46,21 +46,21 @@ class MoveValidator:
     
     def get_all_valid_moves(self, position):
         valid_moves = []
-        for rank in range (8):
+        for rank in range(8):
             for file in range(8):
                 if self.is_valid_move(position, (file, rank)):
-                    valid_moves.append((file,rank))
+                    valid_moves.append((file, rank))
         return valid_moves            
     
     def is_valid_castling(self, start_pos, end_pos, color):
         start_file, start_rank = start_pos
         end_file, end_rank = end_pos
 
-        #King must be on its starting position
+        # King must be on its starting position
         if color == 'w':
             if start_file != 4 or start_rank != 7:
                 return False
-        else: #Black
+        else:  # Black
             if start_file != 4 or start_rank != 0:
                 return False     
 
@@ -115,14 +115,14 @@ class MoveValidator:
         temp_board = [row[:] for row in self.board]
         piece = temp_board[start[1]][start[0]]
 
-        #Handle en passure capture
-        if (piece[1] == 'P' and start[0] != end[0] and temp_board[end[1]][end[0]] =='' and self.last_move):
+        # Handle en passant capture
+        if (piece[1] == 'P' and start[0] != end[0] and temp_board[end[1]][end[0]] == '' and self.last_move):
             last_start, last_end = self.last_move
             last_piece = temp_board[last_end[1]][last_end[0]]
 
             if (last_piece and last_piece[1] == 'P' and 
                 last_piece[0] != color and 
-                abs(last_start[1]-last_end[1]) ==2 and 
+                abs(last_start[1] - last_end[1]) == 2 and 
                 last_end[0] == end[0]):
 
                 temp_board[last_end[1]][last_end[0]] = ''
@@ -147,7 +147,6 @@ class MoveValidator:
         # Check if the king is in check after the move
         return not self.is_king_in_check(temp_board, color)
     
-    
     def is_king_in_check(self, board, color):
         king_pos = None
         # Find the king's position
@@ -160,6 +159,9 @@ class MoveValidator:
             if king_pos:
                 break
         
+        if not king_pos:
+            return False
+        
         # Check if any opponent's piece can attack the king
         for rank in range(8):
             for file in range(8):
@@ -170,6 +172,40 @@ class MoveValidator:
         return False
 
     def is_direct_attack(self, start, end, board):
+        if end is None:
+            # Check if any opponent piece can attack the start position
+            start_file, start_rank = start
+            piece = board[start_rank][start_file]
+            if not piece:
+                return False
+            color = piece[0]
+            opponent_color = 'w' if color == 'b' else 'b'
+            
+            for rank in range(8):
+                for file in range(8):
+                    p = board[rank][file]
+                    if p and p[0] == opponent_color:
+                        # Check if this piece can attack start
+                        piece_type = p[1]
+                        if piece_type == 'P':
+                            direction = -1 if p[0] == 'w' else 1
+                            if (abs(file - start_file) == 1 and 
+                                start_rank == rank + direction):
+                                return True
+                        elif piece_type == 'N':
+                            if (abs(file - start_file), abs(rank - start_rank)) in [(1, 2), (2, 1)]:
+                                return True
+                        elif piece_type in ['B', 'R', 'Q']:
+                            if (piece_type == 'B' and self.is_valid_bishop_move((file, rank), start, board)) or \
+                               (piece_type == 'R' and self.is_valid_rook_move((file, rank), start, board)) or \
+                               (piece_type == 'Q' and (self.is_valid_bishop_move((file, rank), start, board) or 
+                                                       self.is_valid_rook_move((file, rank), start, board))):
+                                return True
+                        elif piece_type == 'K':
+                            if max(abs(file - start_file), abs(rank - start_rank)) == 1:
+                                return True
+            return False
+
         start_file, start_rank = start
         end_file, end_rank = end
         piece = board[start_rank][start_file]
@@ -218,7 +254,7 @@ class MoveValidator:
             if self.board[end_rank][end_file] and self.board[end_rank][end_file][0] != piece_color:
                 return True
 
-        # *Bắt tốt qua đường (en passant)*
+        # Bắt tốt qua đường (en passant)
         if abs(end_file - start_file) == 1 and end_rank == start_rank + direction:
             if self.last_move:
                 last_start, last_end = self.last_move
@@ -286,20 +322,6 @@ class MoveValidator:
     def is_valid_king_move(self, start, end, board=None):
         return max(abs(start[0] - end[0]), abs(start[1] - end[1])) == 1
     
-    def is_checkmate(self, color):
-        if not self.is_king_in_check(self.board, color):
-            return False
-            
-        # Kiểm tra mọi nước đi có thể
-        for rank in range(8):
-            for file in range(8):
-                piece = self.board[rank][file]
-                if piece and piece[0] == color:
-                    valid_moves = self.get_all_valid_moves((file, rank))
-                    if valid_moves:  # Nếu còn nước đi hợp lệ
-                        return False
-        return True
-    
     def is_stalemate(self, color):
         """Kiểm tra hòa do hết nước đi"""
         if self.is_king_in_check(self.board, color):
@@ -312,3 +334,57 @@ class MoveValidator:
                     if self.get_all_valid_moves((file, rank)):
                         return False
         return True
+
+    # --- Phương thức mới được thêm ---
+    def is_checkmate(self, color):
+        """Check if the given color is in checkmate"""
+        if not self.is_king_in_check(self.board, color):
+            return False
+
+        # Check if any move can escape check
+        for rank in range(8):
+            for file in range(8):
+                piece = self.board[rank][file]
+                if piece and piece[0] == color:
+                    start_pos = (file, rank)
+                    valid_moves = self.get_all_valid_moves(start_pos)
+                    for end_pos in valid_moves:
+                        # Try the move on a temporary board
+                        temp_board = [row[:] for row in self.board]
+                        piece = temp_board[start_pos[1]][start_pos[0]]
+                        temp_board[end_pos[1]][end_pos[0]] = piece
+                        temp_board[start_pos[1]][start_pos[0]] = ''
+                        # Handle pawn promotion
+                        if piece[1] == 'P' and (end_pos[1] == 0 or end_pos[1] == 7):
+                            temp_board[end_pos[1]][end_pos[0]] = color + 'Q'
+                        if not self.is_king_in_check(temp_board, color):
+                            return False  # Found a move to escape check
+        return True  # No move can escape check, it's checkmate
+
+    def execute_move(self, board, start_pos, end_pos):
+        """Execute a move on the board for simulation"""
+        start_file, start_rank = start_pos
+        end_file, end_rank = end_pos
+        piece = board[start_rank][start_file]
+        board[end_rank][end_file] = piece
+        board[start_rank][start_file] = ''
+        # Handle pawn promotion
+        if piece and piece[1] == 'P' and (end_rank == 0 or end_rank == 7):
+            board[end_rank][end_file] = piece[0] + 'Q'
+        # Handle en passant
+        if (piece[1] == 'P' and start_file != end_file and 
+            board[end_rank][end_file] == '' and self.last_move):
+            last_start, last_end = self.last_move
+            if (abs(last_start[1] - last_end[1]) == 2 and 
+                last_end[0] == end_file and last_end[1] == start_rank):
+                board[last_end[1]][last_end[0]] = ''
+        # Handle castling
+        if piece[1] == 'K' and abs(start_file - end_file) == 2:
+            if end_file > start_file:  # Kingside
+                rook_start = (7, start_rank)
+                rook_end = (5, start_rank)
+            else:  # Queenside
+                rook_start = (0, start_rank)
+                rook_end = (3, start_rank)
+            board[rook_end[1]][rook_end[0]] = board[rook_start[1]][rook_start[0]]
+            board[rook_start[1]][rook_start[0]] = ''
